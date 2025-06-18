@@ -37,7 +37,7 @@ export default function ScannerPage() {
 
     try {
       const response = await axios.post(
-        'http://localhost:3000/api/P6MXWJD9HRJ5VL1MESMU/mobileBarcodeScan',
+        'https://api.casaticketing.ma//api/P6MXWJD9HRJ5VL1MESMU/mobileBarcodeScan',
         { qrcode: qrCodeMessage },
         {
           timeout: 10000,
