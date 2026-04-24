@@ -23,28 +23,54 @@ export default function ScannerPage() {
     orderid: string;
   }>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerStateRef = useRef<'idle' | 'starting' | 'running' | 'stopping'>('idle');
+  const scanningWantedRef = useRef<boolean>(false);
+  const hasScannedRef = useRef<boolean>(false);
+  const startSessionRef = useRef<number>(0);
+  const mountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const stopAndClearScanner = async () => {
     const scanner = scannerRef.current;
-    scannerRef.current = null;
-    if (!scanner) return;
+    if (!scanner || scannerStateRef.current === 'stopping') return;
+
+    scannerStateRef.current = 'stopping';
+
     try {
       if (scanner.isScanning) {
         await scanner.stop();
       }
+    } catch (e) {
+      console.warn('Failed to stop scanner cleanly', e);
+    }
+
+    try {
       scanner.clear();
     } catch (e) {
-      console.warn('Failed to cleanly stop scanner', e);
+      console.warn('Failed to clear scanner cleanly', e);
     }
+
+    scannerRef.current = null;
+    scannerStateRef.current = 'idle';
+    hasScannedRef.current = false;
   };
 
   const onScanSuccess = async (qrCodeMessage: string) => {
+    if (hasScannedRef.current) return;
+    hasScannedRef.current = true;
+    scanningWantedRef.current = false;
+
     setIsProcessing(true);
     setTicketInfo(null);
     setError('');
 
-    await stopAndClearScanner();
     setIsScanning(false);
+    await stopAndClearScanner();
 
     try {
       const response = await axios.post(
@@ -86,22 +112,29 @@ export default function ScannerPage() {
   };
 
   const startScanning = () => {
+    if (scannerStateRef.current !== 'idle') return;
+
+    scanningWantedRef.current = true;
+    hasScannedRef.current = false;
     setError('');
     setValidationResult(null);
     setIsScanning(true);
   };
 
   useEffect(() => {
-    if (!isScanning || scannerRef.current) return;
+    if (!isScanning || !scanningWantedRef.current || scannerStateRef.current !== 'idle') return;
 
-    let cancelled = false;
+    const currentSession = startSessionRef.current + 1;
+    startSessionRef.current = currentSession;
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
+      void (async () => {
       const element = document.getElementById('qr-reader');
       if (!element) {
         console.error('QR reader element not found');
         setError('Scanner initialization failed');
         setIsScanning(false);
+        scanningWantedRef.current = false;
         return;
       }
 
@@ -116,73 +149,65 @@ export default function ScannerPage() {
         qrbox: { width: 250, height: 250 },
         aspectRatio: 1.0,
       };
-
-      const tryStart = async (
-        constraint: MediaTrackConstraints | { facingMode: string }
-      ) => {
-        await html5QrCode.start(
-          constraint,
-          scanConfig,
-          (decodedText) => onScanSuccess(decodedText),
-          (errMsg) => onScanError(errMsg)
-        );
-      };
+      scannerStateRef.current = 'starting';
 
       try {
-        try {
-          await tryStart({ facingMode: { ideal: 'environment' } });
-        } catch (primaryErr) {
-          console.warn(
-            'Environment-facing camera unavailable, falling back to any camera.',
-            primaryErr
-          );
-          if (cancelled) throw primaryErr;
-          try {
-            await tryStart({ facingMode: 'user' });
-          } catch {
-            const devices = await Html5Qrcode.getCameras();
-            if (!devices || devices.length === 0) {
-              throw primaryErr;
-            }
-            await tryStart({ deviceId: { exact: devices[0].id } });
-          }
+        await html5QrCode.start(
+          { facingMode: { exact: 'environment' } },
+          scanConfig,
+          (decodedText) => void onScanSuccess(decodedText),
+          (errMsg) => onScanError(errMsg)
+        );
+
+        if (
+          !mountedRef.current ||
+          !scanningWantedRef.current ||
+          startSessionRef.current !== currentSession
+        ) {
+          await stopAndClearScanner();
+          return;
         }
 
-        if (cancelled) {
-          await stopAndClearScanner();
-        }
+        scannerStateRef.current = 'running';
       } catch (err) {
         console.error('Failed to start scanner', err);
         scannerRef.current = null;
-        if (!cancelled) {
-          const message =
-            err instanceof Error ? err.message : String(err ?? 'Unknown error');
-          const isInsecure =
-            typeof window !== 'undefined' &&
-            !window.isSecureContext &&
-            window.location.hostname !== 'localhost' &&
-            window.location.hostname !== '127.0.0.1';
-          setError(
-            isInsecure
-              ? 'Camera access requires HTTPS or localhost. Please open this page on https:// or localhost.'
-              : `Unable to access camera: ${message}. Please check browser camera permissions.`
-          );
-          setIsScanning(false);
-        }
+        scannerStateRef.current = 'idle';
+
+        const message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+        const isInsecure =
+          typeof window !== 'undefined' &&
+          !window.isSecureContext &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1';
+        const isBackCameraMissing =
+          message.includes('OverconstrainedError') ||
+          message.includes('Requested device not found');
+
+        setError(
+          isInsecure
+            ? 'Camera access requires HTTPS or localhost.'
+            : isBackCameraMissing
+            ? 'Back camera not found on this device/browser.'
+            : `Unable to access camera: ${message}`
+        );
+        setIsScanning(false);
+        scanningWantedRef.current = false;
       }
+      })();
     }, 100);
 
     return () => {
-      cancelled = true;
       clearTimeout(timer);
     };
-    // onScanSuccess/onScanError are stable closures over state setters; intentionally excluded
+    // onScanSuccess is intentionally stable for scanner callbacks in this effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   const stopScanning = async () => {
-    await stopAndClearScanner();
+    scanningWantedRef.current = false;
     setIsScanning(false);
+    await stopAndClearScanner();
   };
 
   const resetScanner = async () => {
