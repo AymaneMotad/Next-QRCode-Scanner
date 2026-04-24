@@ -73,36 +73,37 @@ export default function ScannerPage() {
     await stopAndClearScanner();
 
     try {
+      const form = new FormData();
+      form.append('qrcode', qrCodeMessage);
+
       const response = await axios.post(
         'https://api.casaticketing.ma/api/P6MXWJD9HRJ5VL1MESMU/mobileBarcodeScan',
-        { qrcode: qrCodeMessage },
-        {
-          timeout: 10000,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
+        form,
+        { timeout: 10000 }
       );
-      if (response.status === 200) {
-        console.log('API 200 Response:', response.data);
-      }
-      const ticket = response.data?.ticket;
-      if (
-        response.data &&
-        response.data.status === 'success' &&
-        ticket &&
-        typeof ticket === 'object' &&
-        Object.keys(ticket).length > 0
-      ) {
+
+      if (response.status === 200 && response.data?.code === 'SCAN_OK') {
         setValidationResult('valid');
-        setTicketInfo(ticket);
+        setTicketInfo(response.data.ticket ?? null);
       } else {
         setValidationResult('invalid');
-        setError('Ticket not found.');
+        setError('Erreur API.');
       }
-    } catch {
+    } catch (err: unknown) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const code = axios.isAxiosError(err) ? err.response?.data?.code : undefined;
+
       setValidationResult('invalid');
-      setError('API error. Ticket not found.');
+
+      if (status === 409 && code === 'ALREADY_SCANNED') {
+        setError('Ticket deja scanne.');
+      } else if (status === 404) {
+        setError('Ticket introuvable.');
+      } else if (status === 400) {
+        setError('Requete invalide: qrcode manquant.');
+      } else {
+        setError('Erreur API.');
+      }
     }
     setIsProcessing(false);
   };
