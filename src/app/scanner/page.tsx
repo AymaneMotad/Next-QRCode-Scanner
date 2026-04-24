@@ -87,22 +87,27 @@ export default function ScannerPage() {
         setTicketInfo(response.data.ticket ?? null);
       } else {
         setValidationResult('invalid');
-        setError('Erreur API.');
+        setError("Réponse inattendue du serveur lors de la validation du ticket.");
       }
     } catch (err: unknown) {
-      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-      const code = axios.isAxiosError(err) ? err.response?.data?.code : undefined;
+      const isAxiosErr = axios.isAxiosError(err);
+      const status = isAxiosErr ? err.response?.status : undefined;
+      const code = isAxiosErr ? err.response?.data?.code : undefined;
 
       setValidationResult('invalid');
 
       if (status === 409 && code === 'ALREADY_SCANNED') {
-        setError('Ticket deja scanne.');
+        setError('Ce ticket a déjà été scanné. Entrée refusée.');
       } else if (status === 404) {
-        setError('Ticket introuvable.');
+        setError('Ticket invalide ou introuvable.');
       } else if (status === 400) {
-        setError('Requete invalide: qrcode manquant.');
+        setError('Requête invalide : QR code manquant ou mal formé.');
+      } else if (isAxiosErr && err.code === 'ECONNABORTED') {
+        setError("Le serveur met trop de temps à répondre. Veuillez réessayer.");
+      } else if (isAxiosErr && !err.response) {
+        setError('Impossible de joindre le serveur. Vérifiez votre connexion.');
       } else {
-        setError('Erreur API.');
+        setError("Erreur serveur pendant la validation du ticket. Veuillez réessayer.");
       }
     }
     setIsProcessing(false);
