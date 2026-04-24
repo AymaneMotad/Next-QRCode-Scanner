@@ -5,7 +5,7 @@ import { CheckCircle, XCircle, Camera } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Html5QrcodeScanner, Html5QrcodeScanType, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import axios from 'axios';
 import '../globals.css';
 
@@ -22,17 +22,28 @@ export default function ScannerPage() {
     email: string;
     orderid: string;
   }>(null);
-  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+
+  const stopAndClearScanner = async () => {
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    if (!scanner) return;
+    try {
+      if (scanner.isScanning) {
+        await scanner.stop();
+      }
+      scanner.clear();
+    } catch (e) {
+      console.warn('Failed to cleanly stop scanner', e);
+    }
+  };
 
   const onScanSuccess = async (qrCodeMessage: string) => {
     setIsProcessing(true);
     setTicketInfo(null);
     setError('');
 
-    if (scannerRef.current) {
-      scannerRef.current.clear();
-      scannerRef.current = null;
-    }
+    await stopAndClearScanner();
     setIsScanning(false);
 
     try {
@@ -70,8 +81,8 @@ export default function ScannerPage() {
     setIsProcessing(false);
   };
 
-  const onScanError = () => {
-    // Handle scan error silently
+  const onScanError = (_errorMessage: string) => {
+    void _errorMessage;
   };
 
   const startScanning = () => {
@@ -81,59 +92,108 @@ export default function ScannerPage() {
   };
 
   useEffect(() => {
-    if (isScanning && !scannerRef.current) {
-      setTimeout(() => {
-        const element = document.getElementById('qr-reader');
-        if (element) {
-          const html5QrCodeScanner = new Html5QrcodeScanner(
-            'qr-reader',
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 250 },
-              aspectRatio: 1.0,
-              showTorchButtonIfSupported: true,
-              showZoomSliderIfSupported: true,
-              defaultZoomValueIfSupported: 2,
-              formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-              rememberLastUsedCamera: true,
-              supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
-              videoConstraints: {
-                facingMode: { exact: "environment" }
-              }
-            },
-            false
-          );
+    if (!isScanning || scannerRef.current) return;
 
-          scannerRef.current = html5QrCodeScanner;
-          html5QrCodeScanner.render(onScanSuccess, onScanError);
-        } else {
-          console.error('QR reader element not found');
-          setError('Scanner initialization failed');
+    let cancelled = false;
+
+    const timer = setTimeout(async () => {
+      const element = document.getElementById('qr-reader');
+      if (!element) {
+        console.error('QR reader element not found');
+        setError('Scanner initialization failed');
+        setIsScanning(false);
+        return;
+      }
+
+      const html5QrCode = new Html5Qrcode('qr-reader', {
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+        verbose: false,
+      });
+      scannerRef.current = html5QrCode;
+
+      const scanConfig = {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+        aspectRatio: 1.0,
+      };
+
+      const tryStart = async (
+        constraint: MediaTrackConstraints | { facingMode: string }
+      ) => {
+        await html5QrCode.start(
+          constraint,
+          scanConfig,
+          (decodedText) => onScanSuccess(decodedText),
+          (errMsg) => onScanError(errMsg)
+        );
+      };
+
+      try {
+        try {
+          await tryStart({ facingMode: { ideal: 'environment' } });
+        } catch (primaryErr) {
+          console.warn(
+            'Environment-facing camera unavailable, falling back to any camera.',
+            primaryErr
+          );
+          if (cancelled) throw primaryErr;
+          try {
+            await tryStart({ facingMode: 'user' });
+          } catch {
+            const devices = await Html5Qrcode.getCameras();
+            if (!devices || devices.length === 0) {
+              throw primaryErr;
+            }
+            await tryStart({ deviceId: { exact: devices[0].id } });
+          }
+        }
+
+        if (cancelled) {
+          await stopAndClearScanner();
+        }
+      } catch (err) {
+        console.error('Failed to start scanner', err);
+        scannerRef.current = null;
+        if (!cancelled) {
+          const message =
+            err instanceof Error ? err.message : String(err ?? 'Unknown error');
+          const isInsecure =
+            typeof window !== 'undefined' &&
+            !window.isSecureContext &&
+            window.location.hostname !== 'localhost' &&
+            window.location.hostname !== '127.0.0.1';
+          setError(
+            isInsecure
+              ? 'Camera access requires HTTPS or localhost. Please open this page on https:// or localhost.'
+              : `Unable to access camera: ${message}. Please check browser camera permissions.`
+          );
           setIsScanning(false);
         }
-      }, 100);
-    }
+      }
+    }, 100);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // onScanSuccess/onScanError are stable closures over state setters; intentionally excluded
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
-  const stopScanning = () => {
-    if (scannerRef.current) {
-      scannerRef.current.clear();
-      scannerRef.current = null;
-    }
+  const stopScanning = async () => {
+    await stopAndClearScanner();
     setIsScanning(false);
   };
 
-  const resetScanner = () => {
-    stopScanning();
+  const resetScanner = async () => {
+    await stopScanning();
     setValidationResult(null);
     setError('');
   };
 
   useEffect(() => {
     return () => {
-      if (scannerRef.current) {
-        scannerRef.current.clear();
-      }
+      void stopAndClearScanner();
     };
   }, []);
 
