@@ -77,7 +77,7 @@ export default function ScannerPage() {
       form.append('qrcode', qrCodeMessage);
 
       const response = await axios.post(
-        'https://api.staging.casaticketing.ma/api/P6MXWJD9HRJ5VL1MESMU/mobileBarcodeScan',
+        'https://api.casaticketing.ma/api/P6MXWJD9HRJ5VL1MESMU/mobileBarcodeScan',
         form,
         { timeout: 10000 }
       );
